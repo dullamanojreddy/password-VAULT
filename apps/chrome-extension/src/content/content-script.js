@@ -73,6 +73,55 @@ async function openSuggestionFor(field, classification) {
   send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.suggestion_shown', detail: `${classification.kind} form on ${pageOrigin}`, severity: 'info' })
 }
 
+function getCleanAppName() {
+  const host = location.hostname.replace(/^www\./i, '')
+  const parts = host.split('.')
+  if (parts.length >= 2) {
+    const brand = parts[parts.length - 2]
+    if (brand && brand.length > 2) return brand.charAt(0).toUpperCase() + brand.slice(1)
+  }
+  return document.title?.split(/[-|•–]/)[0]?.trim() || host
+}
+
+function getFormUsername() {
+  const selectors = [
+    'input[autocomplete="username"]',
+    'input[autocomplete="email"]',
+    'input[type="email"]',
+    'input[name*="email" i]',
+    'input[name*="user" i]',
+    'input[name*="login" i]',
+    'input[name*="phone" i]',
+    'input[name*="mobile" i]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="username" i]',
+    'input[placeholder*="mobile" i]',
+    'input[type="text"]',
+  ]
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (el.value && el.value.trim() && el.type !== 'password') {
+        return el.value.trim()
+      }
+    }
+  }
+  return ''
+}
+
+function showInPageNotification(msg) {
+  const toast = document.createElement('div')
+  toast.style.cssText = `
+    position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
+    background: #0d1424; color: #38bdf8; border: 1px solid #38bdf8;
+    border-radius: 8px; padding: 12px 18px; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 10px;
+    animation: fadeIn 0.2s ease-in;
+  `
+  toast.innerHTML = `<span style="font-size: 16px;">🛡️</span> <span>${msg}</span>`
+  document.documentElement.appendChild(toast)
+  setTimeout(() => { toast.remove() }, 3500)
+}
+
 function onPanelAction(field, classification, getCurrent, setCurrent) {
   return async (act) => {
     if (act === 'dismiss') {
@@ -95,31 +144,43 @@ function onPanelAction(field, classification, getCurrent, setCurrent) {
 
     if (isInsecure) return // 'use' and 'save' are disabled in the panel UI on insecure origins; enforce it here too
 
-    if (act === 'use') {
+    if (act === 'use' || act === 'save') {
       const password = getCurrent()
+      const appName = getCleanAppName()
+      const username = getFormUsername() || `account@${location.hostname.replace(/^www\./i, '')}`
+
+      // 1. Encrypt and save in vault
+      const res = await send(ACTIONS.CREATE_CREDENTIAL, {
+        app: appName,
+        username,
+        password,
+        url: pageOrigin,
+      })
+
+      // 2. Set field values
       setNativeValue(field, password)
       if (classification.fields.confirm && classification.fields.confirm !== field) {
         setNativeValue(classification.fields.confirm, password)
       }
-      hideSuggestionPanel()
-      send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.autofill_filled', detail: `Generated password inserted on ${pageOrigin}`, severity: 'warn' })
-      return
-    }
 
-    if (act === 'save') {
-      const password = getCurrent()
-      const usernameField = document.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i]')
-      const res = await send(ACTIONS.CREATE_CREDENTIAL, {
-        app: document.title?.slice(0, 60) || pageOrigin,
-        username: usernameField?.value || '',
-        password,
-        url: pageOrigin,
-      })
-      if (res?.ok) {
-        setNativeValue(field, password)
-        if (classification.fields.confirm && classification.fields.confirm !== field) setNativeValue(classification.fields.confirm, password)
-      }
+      // 3. Copy to clipboard
+      try {
+        await navigator.clipboard.writeText(password)
+      } catch { /* clipboard */ }
+
       hideSuggestionPanel()
+
+      if (res?.ok) {
+        showInPageNotification(`Encrypted & saved as <strong>${appName}</strong> (${username}) in your AEGIS Vault!`)
+      } else {
+        showInPageNotification(`Password filled & copied for <strong>${appName}</strong>`)
+      }
+
+      send(ACTIONS.SUBMIT_AUDIT, {
+        action: 'assistant.autofill_saved',
+        detail: `Generated password for ${appName} (${username}) filled and encrypted into vault`,
+        severity: 'info',
+      })
       return
     }
   }
