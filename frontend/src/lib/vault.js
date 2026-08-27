@@ -41,6 +41,22 @@ function load() {
   return { users: [], items: [], audit: [], policy: { ...DEFAULT_POLICY }, seeded: false }
 }
 
+if (typeof window !== 'undefined') {
+  const onSync = () => {
+    state.db = load()
+    if (state.session) {
+      for (const it of state.db.items) {
+        if (!it.userId) it.userId = state.session.userId
+      }
+    }
+    set({ db: state.db })
+  }
+  window.addEventListener('storage', (e) => {
+    if (e.key === DB_KEY) onSync()
+  })
+  window.addEventListener('aegis:vault-updated', onSync)
+}
+
 const uid = () => b64(randomBytes(9)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)
 const now = () => new Date().toISOString()
 

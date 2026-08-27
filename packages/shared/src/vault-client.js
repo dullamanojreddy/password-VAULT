@@ -177,7 +177,7 @@ export class LocalVaultClient {
     items.push(item)
     await this._storage.set(KEYS.items, items)
     await this._audit(AUDIT_ACTIONS.SAVE, `${draft.app} saved via ${this._clientName}`, 'info')
-    return { ok: true, id: item.id }
+    return { ok: true, id: item.id, item }
   }
 
   async updateCredential(id, draft) {

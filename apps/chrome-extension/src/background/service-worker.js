@@ -46,6 +46,40 @@ const router = createRouter({
   },
 })
 
+async function syncToWebTabs(item) {
+  try {
+    const tabs = await chrome.tabs.query({ url: ['http://localhost:5173/*', 'http://127.0.0.1:5173/*'] })
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (newItem) => {
+            try {
+              const KEY = 'aegis.db.v1'
+              const raw = localStorage.getItem(KEY)
+              const db = raw ? JSON.parse(raw) : { users: [], items: [], audit: [] }
+              db.items = db.items || []
+              const activeUser = db.users?.[0]
+              if (activeUser) {
+                newItem.userId = activeUser.id
+              }
+              const existingIdx = db.items.findIndex((i) => i.id === newItem.id)
+              if (existingIdx >= 0) {
+                db.items[existingIdx] = newItem
+              } else {
+                db.items.unshift(newItem)
+              }
+              localStorage.setItem(KEY, JSON.stringify(db))
+              window.dispatchEvent(new CustomEvent('aegis:vault-updated', { detail: newItem }))
+            } catch (e) {}
+          },
+          args: [item],
+        }).catch(() => {})
+      }
+    }
+  } catch {}
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const validation = validateMessage(message, sender)
   if (!validation.ok) {
@@ -54,7 +88,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false
   }
 
-  router.handle(message, sender).then(sendResponse).catch((err) => {
+  router.handle(message, sender).then(async (result) => {
+    if (message.action === 'aegis/create-credential' && result?.ok && result?.item) {
+      await syncToWebTabs(result.item)
+    }
+    sendResponse(result)
+  }).catch((err) => {
     sendResponse({ ok: false, error: err?.message ?? 'internal error' })
   })
   return true // keep the message channel open for the async response
