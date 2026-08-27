@@ -30,7 +30,6 @@
         "*://accounts.google.com/*",
         "*://*.paypal.com/*",
         "*://*.stripe.com/*",
-        "*://checkout.*/*",
         "*://chrome.google.com/webstore/*",
         "*://chromewebstore.google.com/*"
       ],
