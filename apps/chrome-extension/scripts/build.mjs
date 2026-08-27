@@ -26,6 +26,8 @@ const entries = [
   { in: 'src/options/options.js', out: 'options/options.js', format: 'esm' },
 ]
 
+const sharedSrc = join(root, '../../packages/shared/src')
+
 for (const e of entries) {
   await build({
     entryPoints: [join(root, e.in)],
@@ -36,6 +38,15 @@ for (const e of entries) {
     minify: false,
     sourcemap: true,
     logLevel: 'info',
+    alias: {
+      '@aegis/shared/vault-client': join(sharedSrc, 'vault-client.js'),
+      '@aegis/shared/crypto': join(sharedSrc, 'crypto.js'),
+      '@aegis/shared/strength': join(sharedSrc, 'strength.js'),
+      '@aegis/shared/config': join(sharedSrc, 'config.js'),
+      '@aegis/shared/credential-schema': join(sharedSrc, 'credential-schema.js'),
+      '@aegis/shared/audit': join(sharedSrc, 'audit.js'),
+      '@aegis/shared': join(sharedSrc, 'index.js'),
+    },
   })
 }
 
