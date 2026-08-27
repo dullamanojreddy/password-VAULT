@@ -154,6 +154,42 @@ export async function unlock(username, masterPassword) {
   return { ok: true, user }
 }
 
+export async function registerAccount({ username, name, masterPassword, phone = '' }) {
+  const uname = username.trim().toLowerCase()
+  if (!uname) return { ok: false, error: 'Account username is required' }
+  if (uname.length < 3) return { ok: false, error: 'Username must be at least 3 characters' }
+  if (!masterPassword || masterPassword.length < 8) {
+    return { ok: false, error: 'Master password must be at least 8 characters' }
+  }
+
+  const existing = state.db.users.find((u) => u.username === uname)
+  const isDemo = DEMO_ACCOUNTS.some((d) => d.username === uname)
+  if (existing || isDemo) {
+    return { ok: false, error: 'Account already exists. Please choose a different username.' }
+  }
+
+  const { key, salt, verifier } = await deriveKey(masterPassword)
+  const user = {
+    id: uid(),
+    username: uname,
+    name: name?.trim() || uname,
+    role: 'user',
+    salt,
+    verifier,
+    createdAt: now(),
+    status: 'active',
+    mfa: true,
+    lastSeen: now(),
+    phone: phone?.trim() || '',
+  }
+
+  state.db.users.push(user)
+  persist()
+  set({ session: { userId: user.id, username: user.username, name: user.name, role: user.role, key, unlockedAt: Date.now() }, locked: false })
+  audit('vault.registered', `New account created: "${uname}"`, 'info')
+  return { ok: true, user }
+}
+
 export function lock(reason = 'manual') {
   if (state.session) audit('vault.locked', `Session ended (${reason}) — key zeroed from memory`, 'info')
   set({ session: null, locked: true })   // dropping the reference discards the CryptoKey
