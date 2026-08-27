@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Search, Plus, Eye, EyeOff, Copy, Check, Star, Pencil, Trash2, ExternalLink, KeySquare,
+  Search, Plus, Eye, EyeOff, Copy, Check, Star, Pencil, Trash2, ExternalLink, KeySquare, ShieldAlert, Wand2,
 } from 'lucide-react'
 import { CATEGORIES } from '../lib/config'
 import { decryptAll, deleteItem, toggleFavorite } from '../lib/vault'
@@ -18,6 +18,7 @@ export default function Vault() {
   const [cat, setCat] = useState('All')
   const [revealed, setRevealed] = useState({})
   const [editing, setEditing] = useState(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(null)
   const { copy, copiedId, remaining } = useSecureClipboard()
 
   // Decrypt the whole vault once per change — needed for reuse detection anyway.
@@ -115,30 +116,51 @@ export default function Vault() {
                     </div>
                     <p className="truncate text-[11.5px] text-[#7b8aa5]">{item.username}</p>
                   </div>
-                  <StrengthBadge level={a.level} />
+                  {item.locked ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-300">
+                      <ShieldAlert size={10} /> LOCKED
+                    </span>
+                  ) : (
+                    <StrengthBadge level={a.level} />
+                  )}
                 </div>
 
-                <div className="mt-3 flex items-center gap-1.5 rounded-lg border border-[#1e293b] bg-[#070b14] px-2.5 py-2">
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-[#e8eefc]">
-                    {isRevealed ? item.plaintext : '•'.repeat(Math.min(18, item.plaintext?.length ?? 12))}
-                  </span>
-                  <button
-                    onClick={() => setRevealed((r) => ({ ...r, [item.id]: !r[item.id] }))}
-                    title={isRevealed ? 'Hide' : 'Reveal'}
-                    className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
-                  >
-                    {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                  </button>
-                  <button
-                    onClick={() => copy(item.plaintext, item.id, item.app)}
-                    title="Copy (auto-clears)"
-                    className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
-                  >
-                    {copiedId === item.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                  </button>
-                </div>
+                {item.locked ? (
+                  <div className="mt-3 space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] p-2.5">
+                    <p className="text-[11.5px] leading-relaxed text-rose-300">
+                      Flagged {item.compromiseReason === 'admin-flag' ? 'by an administrator' : 'as compromised'}.
+                      Reveal and copy are disabled until you set a new password.
+                    </p>
+                    <button
+                      onClick={() => setEditing(item)}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-b from-rose-400 to-rose-500 py-1.5 text-[12px] font-semibold text-[#1a0508] transition hover:brightness-110"
+                    >
+                      <Wand2 size={12} /> Rotate now to unlock
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-center gap-1.5 rounded-lg border border-[#1e293b] bg-[#070b14] px-2.5 py-2">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-[#e8eefc]">
+                      {isRevealed ? item.plaintext : '•'.repeat(Math.min(18, item.plaintext?.length ?? 12))}
+                    </span>
+                    <button
+                      onClick={() => setRevealed((r) => ({ ...r, [item.id]: !r[item.id] }))}
+                      title={isRevealed ? 'Hide' : 'Reveal'}
+                      className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
+                    >
+                      {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button
+                      onClick={() => copy(item.plaintext, item.id, item.app)}
+                      title="Copy (auto-clears)"
+                      className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
+                    >
+                      {copiedId === item.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    </button>
+                  </div>
+                )}
 
-                {reuseMap[item.plaintext] > 1 && (
+                {!item.locked && reuseMap[item.plaintext] > 1 && (
                   <p className="mt-2 text-[11px] text-rose-300">
                     Reused across {reuseMap[item.plaintext]} accounts
                   </p>
@@ -167,7 +189,7 @@ export default function Vault() {
                       <Pencil size={13} />
                     </button>
                     <button
-                      onClick={() => { if (confirm(`Delete ${item.app} from your vault?`)) deleteItem(item.id) }}
+                      onClick={() => setConfirmingDelete(item.id)}
                       title="Delete"
                       className="text-[#4d5f7a] transition hover:text-rose-300"
                     >
@@ -175,6 +197,26 @@ export default function Vault() {
                     </button>
                   </div>
                 </div>
+
+                {confirmingDelete === item.id && (
+                  <div className="fade-up mt-2.5 flex items-center justify-between gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-2 text-[11.5px] text-rose-300">
+                    <span>Delete {item.app}?</span>
+                    <span className="flex shrink-0 gap-1.5">
+                      <button
+                        onClick={() => { deleteItem(item.id); setConfirmingDelete(null) }}
+                        className="rounded-md bg-rose-500 px-2 py-1 text-[10.5px] font-semibold text-white transition hover:brightness-110"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={() => setConfirmingDelete(null)}
+                        className="rounded-md border border-rose-400/30 px-2 py-1 text-[10.5px] text-rose-300 transition hover:bg-rose-400/10"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  </div>
+                )}
               </div>
             )
           })}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Search, FileLock2, Lock, ShieldX, Loader2, Download, Info } from 'lucide-react'
-import { allItemsMeta } from '../lib/vault'
+import { Search, FileLock2, Lock, ShieldX, Loader2, Download, Info, ShieldAlert, MessageCircle, Check } from 'lucide-react'
+import { allItemsMeta, flagCompromised } from '../lib/vault'
 import { useVault } from '../lib/hooks'
 import { CRYPTO } from '../lib/config'
 import { Card, Empty } from '../components/ui'
@@ -14,6 +14,9 @@ export default function AdminRegistry() {
   const rows = allItemsMeta()
   const [q, setQ] = useState('')
   const [attempt, setAttempt] = useState(null)   // { id, phase: 'running' | 'failed' }
+  const [confirming, setConfirming] = useState(null)
+  const [flagging, setFlagging] = useState(null)
+  const [flagResult, setFlagResult] = useState({})
 
   const filtered = useMemo(() => {
     const n = q.toLowerCase()
@@ -26,6 +29,14 @@ export default function AdminRegistry() {
     setAttempt({ id, phase: 'running' })
     await new Promise((r) => setTimeout(r, 900))
     setAttempt({ id, phase: 'failed' })
+  }
+
+  async function respond(row) {
+    setConfirming(null)
+    setFlagging(row.id)
+    const res = await flagCompromised(row.id, { reason: 'admin-flag' })
+    setFlagging(null)
+    setFlagResult((f) => ({ ...f, [row.id]: res }))
   }
 
   function exportCiphertext() {
@@ -82,7 +93,9 @@ export default function AdminRegistry() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-[13px] font-medium text-[#e8eefc]">{r.app}</span>
-                      <StrengthBadge level={r.strength} />
+                      {r.locked
+                        ? <span className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-rose-300"><ShieldAlert size={10} /> LOCKED</span>
+                        : <StrengthBadge level={r.strength} />}
                       <span className="rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-[#7b8aa5]">
                         {r.owner}
                       </span>
@@ -91,16 +104,63 @@ export default function AdminRegistry() {
                       {r.username} · {r.category} · {r.entropy} bits
                     </p>
                   </div>
-                  <button
-                    onClick={() => tryDecrypt(r.id)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#1e293b] px-2.5 py-1.5 text-[11.5px] text-[#7b8aa5] transition hover:border-rose-400/40 hover:text-rose-300"
-                  >
-                    {attempt?.id === r.id && attempt.phase === 'running'
-                      ? <Loader2 size={12} className="animate-spin" />
-                      : <ShieldX size={12} />}
-                    Attempt decrypt
-                  </button>
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      onClick={() => setConfirming(r.id)}
+                      disabled={r.locked || flagging === r.id}
+                      title="Lock this credential, force rotation, and alert the owner over WhatsApp"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 px-2.5 py-1.5 text-[11.5px] font-medium text-amber-300 transition hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {flagging === r.id ? <Loader2 size={12} className="animate-spin" /> : r.locked ? <Check size={12} /> : <ShieldAlert size={12} />}
+                      {r.locked ? 'Locked' : 'Flag compromised'}
+                    </button>
+                    <button
+                      onClick={() => tryDecrypt(r.id)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[#1e293b] px-2.5 py-1.5 text-[11.5px] text-[#7b8aa5] transition hover:border-rose-400/40 hover:text-rose-300"
+                    >
+                      {attempt?.id === r.id && attempt.phase === 'running'
+                        ? <Loader2 size={12} className="animate-spin" />
+                        : <ShieldX size={12} />}
+                      Attempt decrypt
+                    </button>
+                  </div>
                 </div>
+
+                {confirming === r.id && (
+                  <div className="fade-up mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11.5px] text-amber-300">
+                    <span>
+                      Lock this item for <strong>{r.owner}</strong> and force rotation? They'll be alerted over
+                      WhatsApp — never email/SMS, since either could be controlled by the same attacker.
+                    </span>
+                    <span className="flex shrink-0 gap-1.5">
+                      <button
+                        onClick={() => respond(r)}
+                        className="rounded-md bg-amber-400 px-2.5 py-1 text-[11px] font-semibold text-[#1a1206] transition hover:brightness-110"
+                      >
+                        Confirm lock &amp; notify
+                      </button>
+                      <button
+                        onClick={() => setConfirming(null)}
+                        className="rounded-md border border-amber-400/30 px-2.5 py-1 text-[11px] text-amber-300 transition hover:bg-amber-400/10"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  </div>
+                )}
+
+                {flagResult[r.id] && (
+                  <div className={`fade-up mt-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-[11.5px] leading-relaxed ${
+                    flagResult[r.id].ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                  }`}>
+                    <MessageCircle size={13} className="mt-px shrink-0" />
+                    <div>
+                      {flagResult[r.id].ok
+                        ? <>Item locked and a WhatsApp alert was sent to {r.owner}. No password or ciphertext was included in the message — only the app name and reason.</>
+                        : <>Item locked, but the alert could not be delivered: {flagResult[r.id].error}. {r.owner} has not set a WhatsApp number.</>}
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-2 space-y-1 rounded-lg border border-[#1e293b] bg-[#070b14] p-2.5 font-mono text-[10.5px] leading-relaxed">
                   <Row k="alg" v={r.cipher} />

@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AEGIS Settings</title>
+  <style>
+    body { margin: 0; background: #070b14; color: #e8eefc; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .wrap { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+    h1 { font-size: 18px; letter-spacing: .08em; color: #38bdf8; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #7b8aa5; margin-top: 28px; }
+    .card { background: #0d1424; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; margin-top: 10px; }
+    .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1e293b; }
+    .row:last-child { border-bottom: none; }
+    button { font: inherit; cursor: pointer; border-radius: 6px; padding: 6px 10px; border: 1px solid #1e293b; background: #131c30; color: #e8eefc; }
+    .muted { color: #7b8aa5; font-size: 12.5px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    td { padding: 6px 0; border-bottom: 1px solid #1e293b; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AEGIS Settings</h1>
+    <p class="muted">Extension-local settings. Password policy is managed by your AEGIS administrator and shown here read-only.</p>
+
+    <h2>Active org policy</h2>
+    <div class="card" id="policy">Loading…</div>
+
+    <h2>Per-site autofill permissions</h2>
+    <div class="card" id="sites">Loading…</div>
+
+    <h2>Recent activity</h2>
+    <div class="card" id="audit">Loading…</div>
+  </div>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

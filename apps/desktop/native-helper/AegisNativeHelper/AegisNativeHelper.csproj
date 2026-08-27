@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AegisNativeHelper</RootNamespace>
+    <AssemblyName>AegisNativeHelper</AssemblyName>
+    <!-- UIAutomationClient / UIAutomationTypes (System.Windows.Automation.*) ship as
+         part of the WPF-adjacent reference assemblies. We are NOT building a WPF UI —
+         this stays a headless console/worker process — but enabling UseWPF is the
+         standard, documented way to get those assemblies as framework references in
+         a modern (.NET 5+) project without hand-rolling a NuGet reference to the
+         old-style GAC assemblies. -->
+    <UseWPF>true</UseWPF>
+    <!-- No admin elevation for normal operation (spec requirement #20). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Modern ACL'd NamedPipeServerStream factory (NamedPipeServerStreamAcl) —
+         restricts the pipe to the current Windows user instead of relying on a
+         shared-secret token passed through argv/env (both explicitly disallowed
+         by the spec). -->
+    <PackageReference Include="System.IO.Pipes.AccessControl" Version="6.0.0" />
+  </ItemGroup>
+
+</Project>

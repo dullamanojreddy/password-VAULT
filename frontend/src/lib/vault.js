@@ -5,9 +5,10 @@
 // What is persisted:  ciphertext, salts, verifiers, non-reversible metadata.
 // What is NEVER persisted: the master password, the derived AES key, plaintext.
 
-import { deriveKey, encryptField, decryptField, b64, randomBytes } from './crypto'
+import { deriveKey, encryptField, decryptField, b64, randomBytes, DEMO_BREACHED_PASSWORDS } from './crypto'
 import { DEFAULT_POLICY } from './config'
 import { analyze } from './strength'
+import { sendBreachAlert } from './alerts'
 
 const DB_KEY = 'aegis.db.v1'
 
@@ -64,8 +65,8 @@ export function audit(action, detail = '', severity = 'info') {
 // we hold a key derived from the master password they just typed.
 
 export const DEMO_ACCOUNTS = [
-  { username: 'alice',  name: 'Alice Menon',  role: 'user',  master: 'Demo@Vault2026'  },
-  { username: 'admin',  name: 'R. Krishnan',  role: 'admin', master: 'Admin@Vault2026' },
+  { username: 'alice',  name: 'Alice Menon',  role: 'user',  master: 'Demo@Vault2026',  phone: '+919966007804' },
+  { username: 'admin',  name: 'R. Krishnan',  role: 'admin', master: 'Admin@Vault2026', phone: '' },
 ]
 
 const SEED_ITEMS = [
@@ -97,6 +98,7 @@ async function seedFor(user, key) {
       createdAt: new Date(Date.now() - s.age * 864e5).toISOString(),
       updatedAt: new Date(Date.now() - s.age * 864e5).toISOString(),
       favorite: ['Gmail', 'HDFC NetBanking'].includes(s.app),
+      locked: false, compromisedAt: null, compromiseReason: null, breachNotifiedAt: null,
     })
   }
   return created
@@ -120,6 +122,7 @@ export async function unlock(username, masterPassword) {
     user = {
       id: uid(), username: demo.username, name: demo.name, role: demo.role,
       salt, verifier, createdAt: now(), status: 'active', mfa: true, lastSeen: now(),
+      phone: demo.phone ?? '',
     }
     state.db.users.push(user)
 
@@ -188,22 +191,46 @@ export async function saveItem(draft) {
   if (draft.id) {
     const item = state.db.items.find((i) => i.id === draft.id)
     if (!item) return { ok: false, error: 'Not found' }
+    const wasLocked = item.locked
     Object.assign(item, {
       app: draft.app, username: draft.username, url: draft.url, category: draft.category,
       password: blob, strength: a.level, entropy: a.entropy, updatedAt: now(),
+      // Setting a new password IS the rotation — clear any compromise lock
+      // and let a genuinely new breach re-alert instead of staying suppressed.
+      locked: false, compromisedAt: null, compromiseReason: null, breachNotifiedAt: null,
     })
-    audit('item.updated', `${draft.app} — re-encrypted with a fresh IV`, 'info')
+    audit('item.updated', `${draft.app} — re-encrypted with a fresh IV${wasLocked ? ' (rotation cleared the compromise lock)' : ''}`, 'info')
   } else {
     state.db.items.push({
       id: uid(), userId: state.session.userId,
       app: draft.app, username: draft.username, url: draft.url, category: draft.category,
       password: blob, strength: a.level, entropy: a.entropy,
       createdAt: now(), updatedAt: now(), favorite: false,
+      locked: false, compromisedAt: null, compromiseReason: null, breachNotifiedAt: null,
     })
     audit('item.created', `${draft.app} (${draft.username})`, 'info')
   }
   persist()
   return { ok: true }
+}
+
+// ─── Demo tooling ───────────────────────────────────────────────────────
+// For live presentations: swaps one item's password for a value guaranteed
+// to be in the LOCAL breach corpus (see lib/crypto.js), so the detection →
+// lock → auto-alert pipeline fires deterministically and offline, without
+// depending on venue wifi reaching the real HIBP API. Runs through the exact
+// same saveItem() path a real password edit would — nothing here is faked,
+// only the input password is chosen to guarantee a breach hit.
+export async function simulateBreach(itemId) {
+  const item = state.db.items.find((i) => i.id === itemId)
+  if (!item) return { ok: false, error: 'Not found' }
+  const demoPassword = DEMO_BREACHED_PASSWORDS[Math.floor(Math.random() * DEMO_BREACHED_PASSWORDS.length)]
+  const res = await saveItem({
+    id: item.id, app: item.app, username: item.username, url: item.url,
+    category: item.category, password: demoPassword,
+  })
+  if (res.ok) audit('demo.breach_simulated', `${item.app} password set to a known-breached demo value`, 'warn')
+  return res
 }
 
 export function deleteItem(id) {
@@ -227,10 +254,11 @@ export function allItemsMeta() {
   return state.db.items.map((i) => {
     const owner = state.db.users.find((u) => u.id === i.userId)
     return {
-      id: i.id, owner: owner?.username ?? 'unknown', app: i.app, username: i.username,
+      id: i.id, owner: owner?.username ?? 'unknown', ownerPhone: owner?.phone ?? '', app: i.app, username: i.username,
       category: i.category, strength: i.strength, entropy: i.entropy,
       updatedAt: i.updatedAt, createdAt: i.createdAt,
       cipher: i.password.alg, iv: i.password.iv, ct: i.password.ct,
+      locked: !!i.locked, compromisedAt: i.compromisedAt ?? null,
     }
   })
 }
@@ -249,6 +277,75 @@ export function forceRotation(userId) {
   u.rotationRequired = true
   audit('user.rotation', `Rotation enforced for ${u.username}`, 'warn')
   persist()
+}
+
+// ─── Breach response: out-of-band alert + item lockdown ───────────────────
+// Deliberately NOT "delete the account, email the old passwords." Deleting
+// destroys every unrelated credential in the vault over a single leaked app;
+// mailing/WhatsApp-ing the password would ship plaintext through a third
+// party, which is exactly what the zero-knowledge design exists to prevent.
+// Instead: lock only the affected item, force its rotation, and notify the
+// user on a channel independent of whichever app just leaked — never the
+// secret itself, only metadata (see lib/alerts.js).
+
+const maskPhone = (p) => (p ? p.slice(0, 3) + '•'.repeat(Math.max(0, p.length - 6)) + p.slice(-3) : '')
+
+export function setPhone(phone) {
+  if (!state.session) return
+  const u = state.db.users.find((x) => x.id === state.session.userId)
+  if (!u) return
+  u.phone = phone
+  audit('user.phone_set', `WhatsApp alert number set to ${maskPhone(phone)}`, 'info')
+  persist()
+}
+
+export const myPhone = () => state.db.users.find((u) => u.id === state.session?.userId)?.phone ?? ''
+
+// Marks a breach as already alerted so useVaultScan's auto-notify effect
+// doesn't re-fire on every subsequent scan of the same compromised password.
+export function markBreachNotified(itemId) {
+  const item = state.db.items.find((i) => i.id === itemId)
+  if (!item || item.breachNotifiedAt) return
+  item.breachNotifiedAt = now()
+  persist()
+}
+
+// Self-service reminder — the user notifies themselves, nothing is locked.
+export async function notifySelf(item, reason, occurrences) {
+  const phone = myPhone()
+  const res = await sendBreachAlert({ phone, app: item.app, reason, occurrences })
+  audit(
+    res.ok ? 'alert.whatsapp_sent' : 'alert.whatsapp_failed',
+    res.ok ? `Breach alert sent for ${item.app} to ${maskPhone(phone)}${res.simulated ? ' (simulated — backend offline)' : ''}` : res.error,
+    res.ok ? 'warn' : 'critical',
+  )
+  return res
+}
+
+// Admin response to a confirmed compromise: lock the one item, force
+// rotation on the account, and notify the owner. Never touches the other
+// items in that vault, and never suspends or deletes the account.
+export async function flagCompromised(itemId, { reason = 'admin-flag', occurrences } = {}) {
+  const item = state.db.items.find((i) => i.id === itemId)
+  if (!item) return { ok: false, error: 'Not found' }
+  const owner = state.db.users.find((u) => u.id === item.userId)
+
+  item.locked = true
+  item.compromisedAt = now()
+  item.compromiseReason = reason
+  if (owner) owner.rotationRequired = true
+  audit('item.locked', `${item.app} (${owner?.username ?? 'unknown'}) locked — mandatory rotation required`, 'critical')
+  persist()
+
+  const res = await sendBreachAlert({ phone: owner?.phone, app: item.app, reason, occurrences })
+  audit(
+    res.ok ? 'alert.whatsapp_sent' : 'alert.whatsapp_failed',
+    res.ok
+      ? `Breach alert sent to ${owner?.username} (${maskPhone(owner?.phone)})${res.simulated ? ' (simulated — backend offline)' : ''}`
+      : (res.error ?? `${owner?.username} has no WhatsApp number on file`),
+    res.ok ? 'warn' : 'critical',
+  )
+  return res
 }
 
 export function updatePolicy(patch) {

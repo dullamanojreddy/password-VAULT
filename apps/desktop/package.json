@@ -1,0 +1,45 @@
+{
+  "name": "@aegis/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main/index.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build": "vite build",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm run start:electron\"",
+    "start:electron": "cross-env NODE_ENV=development electron .",
+    "package:win": "npm run build && electron-builder --win --x64",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aegis/shared": "*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.0",
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "vite": "^8.2.2",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.aegis.desktop",
+    "productName": "AEGIS Assistant",
+    "files": ["dist/**", "electron/**", "!electron/**/*.test.js"],
+    "extraResources": [{ "from": "native-helper/AegisNativeHelper/bin/Release", "to": "native-helper", "filter": ["**/*"] }],
+    "win": {
+      "target": "nsis",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}

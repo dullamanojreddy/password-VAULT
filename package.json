@@ -1,0 +1,21 @@
+{
+  "name": "aegis-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AEGIS zero-knowledge password vault — web app, Chrome extension, and Windows desktop assistant.",
+  "workspaces": [
+    "frontend",
+    "packages/*",
+    "apps/chrome-extension",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:shared": "npm run test -w @aegis/shared",
+    "test:extension": "npm run test -w @aegis/chrome-extension",
+    "test:desktop": "npm run test -w @aegis/desktop",
+    "build:web": "npm run build -w frontend",
+    "build:extension": "npm run build -w @aegis/chrome-extension",
+    "build:desktop:renderer": "npm run build -w @aegis/desktop"
+  }
+}

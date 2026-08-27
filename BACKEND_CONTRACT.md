@@ -39,7 +39,68 @@ PUT  /api/policy            (admin only)
 
 GET  /api/audit             (admin only, paginated)
 POST /api/audit             { action, detail, severity }
+
+POST /api/alerts/whatsapp   { to, template, variables }
+     # see "Breach alerts (WhatsApp)" below — this is the ONLY endpoint that
+     # talks to a third party (Twilio), so it's the one place secrets live.
 ```
+
+## Breach alerts (WhatsApp)
+
+When a stored credential is flagged as compromised (breached in a public
+dump, reused, or an admin flags it manually), the frontend locks that one
+item and asks you to send a WhatsApp notification. **The request body never
+contains a password** — only `{ to, template, variables }` where `variables`
+is app name / reason / timestamp. Keep it that way: if you ever see a
+`password` field on this route, something upstream broke the zero-knowledge
+guarantee and the frontend has a bug.
+
+```
+POST /api/alerts/whatsapp
+{ "to": "+919966007804", "template": "breach_alert",
+  "variables": { "app": "Instagram", "reason": "found in a public breach (471 exposures)", "when": "8/27/2026, 3:04:12 PM" } }
+
+-> 200 { "ok": true, "sid": "SM..." }
+-> 502 { "ok": false, "error": "..." }   # frontend degrades gracefully either way
+```
+
+Server-side implementation (Twilio's Node SDK, called from FastAPI via a
+small subprocess/queue, or reimplemented with `twilio` the Python package —
+either is fine):
+
+```python
+# main.py — Twilio credentials NEVER go in frontend code, a repo, or a commit.
+# Set these as real environment variables (.env, excluded via .gitignore,
+# or your host's secret manager) and load them at runtime only.
+import os
+from twilio.rest import Client
+
+client = Client(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+
+@app.post("/api/alerts/whatsapp")
+def send_alert(body: AlertRequest, user=Depends(require_auth)):
+    message = client.messages.create(
+        from_="whatsapp:+14155238886",           # Twilio sandbox/business number
+        content_sid="HXb5b62575e6e4ff6129ad7c8efe1f983e",  # pre-approved template
+        content_variables=json.dumps(body.variables),
+        to=f"whatsapp:{body.to}",
+    )
+    return {"ok": True, "sid": message.sid}
+```
+
+A few things worth being deliberate about:
+
+- **Rotate the Account SID / Auth Token before this ships anywhere** if they were
+  ever pasted into a chat, a doc, or a commit — treat any credential that's been
+  shared in plaintext as burned, regenerate it in the Twilio console.
+- **`.env` goes in `.gitignore`.** Never commit it. If a `.env.example` is useful
+  for teammates, commit that instead, with placeholder values.
+- Content templates (the `content_sid`) must be pre-approved in the Twilio
+  console before they can be sent outside the 24-hour session window — that's
+  why the frontend sends a `template` name + `variables`, not free text; map
+  `template: "breach_alert"` to your approved Content SID server-side.
+- Rate-limit this endpoint per user (e.g. 1 alert / minute) — it's the one
+  route that can spend real money and spam a real phone number.
 
 ## Minimal data model
 
@@ -54,6 +115,7 @@ class User(BaseModel):
     status: Literal["active", "suspended"] = "active"
     mfa: bool = False
     rotation_required: bool = False
+    phone: str | None = None   # E.164, WhatsApp alert target — never anything sensitive
     created_at: datetime
     last_seen: datetime
 
@@ -75,6 +137,10 @@ class Item(BaseModel):
     created_at: datetime
     updated_at: datetime
     favorite: bool = False
+    locked: bool = False              # true after a breach/admin flag — item unreadable until rotated
+    compromised_at: datetime | None = None
+    compromise_reason: Literal["breach", "reuse", "admin-flag"] | None = None
+    breach_notified_at: datetime | None = None   # dedupes the auto WhatsApp alert — cleared on rotation
 
 class AuditEvent(BaseModel):
     id: str
@@ -88,6 +154,15 @@ class AuditEvent(BaseModel):
 
 SQLite + SQLModel is plenty for a 2-3 hour build. `verifier` and `password.ct`
 are just opaque strings to you — index by `id`/`user_id`, nothing else.
+
+**On `locked` items:** the frontend already hides reveal/copy for a locked
+item, but that's a UX nicety, not real enforcement — client-side checks can
+be bypassed by anyone with dev tools. If you want this to actually hold up,
+have `GET /api/items` omit the `password` blob (or refuse the request) for
+any item where `locked: true`, and only restore it once `PUT /api/items/:id`
+rotates the password (which should also clear the flag). That way the
+"you must rotate before you can read it again" rule is enforced by the
+server, not just hidden by the UI.
 
 ## CORS / dev
 

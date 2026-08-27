@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { subscribe, getState, lock, audit, getPolicy, decryptAll } from './vault'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { subscribe, getState, lock, audit, getPolicy, decryptAll, myPhone, notifySelf, markBreachNotified } from './vault'
 import { checkBreached } from './crypto'
+import { isValidPhone } from './alerts'
 import { vaultReport } from './strength'
 
 export function useVault() {
@@ -52,12 +53,19 @@ export function useSecureClipboard() {
 // Decrypts the vault, runs a k-anonymous breach check on every distinct
 // password, and folds the result through vaultReport(). Shared by Dashboard
 // and Security Health so their numbers are always identical.
+//
+// Also fires the out-of-band WhatsApp alert automatically the moment a
+// breach is detected — no click required — and dedupes so the same
+// compromised password doesn't re-alert on every scan. `db` (not
+// `db.items.length`) is the dependency so a password ROTATION (same item
+// count, new content) correctly triggers a fresh scan too.
 export function useVaultScan() {
   const { db } = useVault()
   const [items, setItems] = useState([])
   const [breaches, setBreaches] = useState({})
   const [scanning, setScanning] = useState(true)
   const policy = getPolicy()
+  const notifiedThisSession = useRef(new Set())
 
   const rescan = useCallback(() => setBreaches({}), [])
 
@@ -79,10 +87,46 @@ export function useVaultScan() {
       if (alive) setScanning(false)
     })()
     return () => { alive = false }
-  }, [db.items.length])
+  }, [db])
 
-  const report = vaultReport(items, breaches, policy)
+  const report = useMemo(() => vaultReport(items, breaches, policy), [items, breaches, policy])
+
+  useEffect(() => {
+    const phone = myPhone()
+    if (!isValidPhone(phone)) return
+    report.breached.forEach((r) => {
+      if (r.breachNotifiedAt || notifiedThisSession.current.has(r.id)) return
+      notifiedThisSession.current.add(r.id)
+      notifySelf(r, 'breach', r.breach?.count).then(() => markBreachNotified(r.id))
+    })
+  }, [report.breached])
+
   return { items, report, scanning, policy, rescan }
+}
+
+// Surfaces the most recent WhatsApp alert as a dismissible toast, wherever
+// the user is in the app — so an automatic breach notification is visible
+// live, not just a line buried in the audit log.
+export function useAlertToast() {
+  const { db } = useVault()
+  const [toast, setToast] = useState(null)
+  const seen = useRef(new Set())
+  const mountedAt = useRef(Date.now())
+
+  useEffect(() => {
+    const fresh = db.audit.find(
+      (e) => (e.action === 'alert.whatsapp_sent' || e.action === 'alert.whatsapp_failed')
+        && !seen.current.has(e.id)
+        && new Date(e.ts).getTime() >= mountedAt.current - 2000,
+    )
+    if (!fresh) return
+    seen.current.add(fresh.id)
+    setToast(fresh)
+    const t = setTimeout(() => setToast((cur) => (cur?.id === fresh.id ? null : cur)), 6000)
+    return () => clearTimeout(t)
+  }, [db.audit])
+
+  return { toast, dismiss: () => setToast(null) }
 }
 
 // Auto-lock on inactivity — the key is dropped, not just the UI hidden.

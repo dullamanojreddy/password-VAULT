@@ -5,3 +5,10 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# .NET build output (native-helper)
+bin/
+obj/
+
+# electron-builder output
+apps/desktop/release/

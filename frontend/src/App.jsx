@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import {
   ShieldCheck, LayoutDashboard, KeySquare, Wand2, HeartPulse, Users, FileLock2,
-  SlidersHorizontal, ScrollText, Info, Lock, LogOut, Timer,
+  SlidersHorizontal, ScrollText, Info, Lock, LogOut, Timer, MessageCircle, X, ShieldAlert,
 } from 'lucide-react'
 import { APP } from './lib/config'
 import { lock } from './lib/vault'
-import { useVault, useAutoLock } from './lib/hooks'
+import { useVault, useAutoLock, useAlertToast } from './lib/hooks'
 
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -45,6 +45,7 @@ function Shell({ session }) {
   const nav = NAV[session.role]
   const [page, setPage] = useState(nav[0].id)
   const { remaining } = useAutoLock()
+  const { toast, dismiss } = useAlertToast()
 
   const current = nav.find((n) => n.id === page) ?? nav[0]
   const Active = current.el
@@ -157,6 +158,31 @@ function Shell({ session }) {
           <Active onNavigate={setPage} />
         </main>
       </div>
+
+      {toast && (
+        <div
+          className={`fade-up fixed bottom-5 right-5 z-50 flex max-w-[360px] items-start gap-3 rounded-xl border p-3.5 shadow-2xl backdrop-blur ${
+            toast.action === 'alert.whatsapp_sent'
+              ? 'border-emerald-400/30 bg-[#0d1424]/95'
+              : 'border-amber-400/30 bg-[#0d1424]/95'
+          }`}
+        >
+          <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${
+            toast.action === 'alert.whatsapp_sent' ? 'bg-emerald-400/10 text-emerald-300' : 'bg-amber-400/10 text-amber-300'
+          }`}>
+            {toast.action === 'alert.whatsapp_sent' ? <MessageCircle size={15} /> : <ShieldAlert size={15} />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-medium text-[#e8eefc]">
+              {toast.action === 'alert.whatsapp_sent' ? 'WhatsApp alert sent' : 'Alert delivery failed'}
+            </div>
+            <p className="mt-0.5 text-[11.5px] leading-relaxed text-[#7b8aa5]">{toast.detail}</p>
+          </div>
+          <button onClick={dismiss} className="shrink-0 text-[#4d5f7a] transition hover:text-[#e8eefc]">
+            <X size={14} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

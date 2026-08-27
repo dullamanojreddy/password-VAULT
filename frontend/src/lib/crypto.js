@@ -157,11 +157,17 @@ export function generatePassphrase({ words = 5, separator = '-', capitalize = tr
 // so the service never learns which password was checked.
 // Falls back to a local corpus when offline (venue wifi / air-gapped demo).
 
-const LOCAL_BREACHED = new Set([
+const LOCAL_BREACHED_LIST = [
   'password','123456','123456789','12345678','qwerty','abc123','password1','111111','iloveyou',
   'admin','welcome','monkey','letmein','dragon','sunshine','princess','football','charlie','aa123456',
   'donald','qwerty123','password123','1q2w3e4r','qwertyuiop','000000','654321','superman','asdfghjkl',
-])
+]
+const LOCAL_BREACHED = new Set(LOCAL_BREACHED_LIST)
+
+// Exposed so demo tooling (lib/vault.js simulateBreach) can pick a value that
+// is GUARANTEED to hit the offline breach path — no network dependency, so a
+// live demo never depends on venue wifi reaching the real HIBP API.
+export const DEMO_BREACHED_PASSWORDS = ['password123', 'qwerty123', 'welcome', '111111', 'iloveyou', 'letmein']
 
 export async function checkBreached(password, { allowNetwork = true, timeoutMs = 2500 } = {}) {
   if (LOCAL_BREACHED.has(password.toLowerCase())) {

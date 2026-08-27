@@ -1,0 +1,199 @@
+// ─── AEGIS content script ──────────────────────────────────────────────────
+// Runs isolated from the page's own JavaScript (standard content-script
+// world) — page scripts cannot read this module's variables, messages, or
+// call its functions. All privileged work (crypto, vault access, storage)
+// happens in the background service worker; this file only observes the
+// DOM, renders the UI, and forwards user-approved actions via
+// chrome.runtime.sendMessage, which the background worker independently
+// re-validates (see lib/messaging.js) rather than trusting anything claimed
+// here.
+
+import { createFieldWatcher } from './observer.js'
+import { classifyForm, nearestFormLikeContainer, isPaymentField } from './classifier.js'
+import { showSuggestionPanel, updateSuggestionPassword, hideSuggestionPanel, isPanelOpen, currentPanelTarget } from './panel.js'
+import { ACTIONS } from '../lib/messaging.js'
+
+const pageOrigin = location.origin
+const isInsecure = location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
+
+function send(action, payload) {
+  return chrome.runtime.sendMessage({ action, payload, origin: pageOrigin })
+}
+
+// React (and most frameworks) track input state via a synthetic wrapper
+// around the native value setter — assigning `.value` directly is silently
+// swallowed. This dispatches through the native setter and fires the same
+// events a real keystroke would, so the framework's own state updates too.
+function setNativeValue(input, value) {
+  const proto = Object.getPrototypeOf(input)
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+  setter ? setter.call(input, value) : (input.value = value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+async function handleNewOrChangeField(input) {
+  if (isPaymentField(input)) return // never engage anywhere near a card field
+
+  const container = nearestFormLikeContainer(input)
+  if (Array.from(container.querySelectorAll('input')).some(isPaymentField)) return
+
+  const classification = classifyForm(container, location.href)
+  if (classification.kind !== 'signup' && classification.kind !== 'password-change') return
+  const targetField = classification.fields.new ?? input
+  if (targetField !== input) return // only react to focus on the actual target field, not a sibling
+
+  input.addEventListener('focus', () => openSuggestionFor(targetField, classification), { once: false })
+  if (document.activeElement === input) await openSuggestionFor(targetField, classification)
+}
+
+async function openSuggestionFor(field, classification) {
+  const statusRes = await send(ACTIONS.GET_STATUS)
+  if (!statusRes?.ok) return
+
+  const genRes = await send(ACTIONS.GENERATE_PASSWORD, { length: 20 })
+  if (!genRes?.ok) return
+  const analyzeRes = await send(ACTIONS.ANALYZE_PASSWORD, { password: genRes.password })
+  const analysis = analyzeRes?.ok ? analyzeRes.analysis : { level: 'strong', score: 0, crack: { human: 'unknown' } }
+
+  let current = genRes.password
+  const render = () => showSuggestionPanel(
+    field,
+    { origin: pageOrigin, insecure: isInsecure },
+    { password: current, score: analysis.score ?? 0, level: analysis.level ?? 'strong', crackTime: analysis.crack?.human ?? 'unknown' },
+    onPanelAction(field, classification, () => current, (v) => { current = v }),
+  )
+  render()
+
+  send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.suggestion_shown', detail: `${classification.kind} form on ${pageOrigin}`, severity: 'info' })
+}
+
+function onPanelAction(field, classification, getCurrent, setCurrent) {
+  return async (act) => {
+    if (act === 'dismiss') {
+      hideSuggestionPanel()
+      send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.suggestion_dismissed', detail: pageOrigin, severity: 'info' })
+      return
+    }
+
+    if (act === 'regenerate') {
+      const genRes = await send(ACTIONS.GENERATE_PASSWORD, { length: 20 })
+      if (!genRes?.ok) return
+      const analyzeRes = await send(ACTIONS.ANALYZE_PASSWORD, { password: genRes.password })
+      setCurrent(genRes.password)
+      updateSuggestionPassword({
+        password: genRes.password,
+        level: analyzeRes?.ok ? analyzeRes.analysis.level : 'strong',
+      })
+      return
+    }
+
+    if (isInsecure) return // 'use' and 'save' are disabled in the panel UI on insecure origins; enforce it here too
+
+    if (act === 'use') {
+      const password = getCurrent()
+      setNativeValue(field, password)
+      if (classification.fields.confirm && classification.fields.confirm !== field) {
+        setNativeValue(classification.fields.confirm, password)
+      }
+      hideSuggestionPanel()
+      send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.autofill_filled', detail: `Generated password inserted on ${pageOrigin}`, severity: 'warn' })
+      return
+    }
+
+    if (act === 'save') {
+      const password = getCurrent()
+      const usernameField = document.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i]')
+      const res = await send(ACTIONS.CREATE_CREDENTIAL, {
+        app: document.title?.slice(0, 60) || pageOrigin,
+        username: usernameField?.value || '',
+        password,
+        url: pageOrigin,
+      })
+      if (res?.ok) {
+        setNativeValue(field, password)
+        if (classification.fields.confirm && classification.fields.confirm !== field) setNativeValue(classification.fields.confirm, password)
+      }
+      hideSuggestionPanel()
+      return
+    }
+  }
+}
+
+// ── Saved-credential offer on login forms ──────────────────────────────────
+
+async function handleLoginField(input) {
+  const container = nearestFormLikeContainer(input)
+  const classification = classifyForm(container, location.href)
+  if (classification.kind !== 'login') return
+  if (classification.fields.current !== input) return
+
+  input.addEventListener('focus', async () => {
+    if (isInsecure) {
+      send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.insecure_origin_blocked', detail: `Login autofill offer suppressed on insecure ${pageOrigin}`, severity: 'critical' })
+      return
+    }
+    const res = await send(ACTIONS.FIND_BY_ORIGIN, { origin: pageOrigin })
+    if (!res?.ok || !res.matches?.length) return
+    // Credentials are never filled from here directly — this only lets the
+    // background worker badge the toolbar icon. The actual fill happens
+    // through the popup's explicit-approval picker (REVEAL_CREDENTIAL),
+    // which re-validates origin match before returning any plaintext.
+    send(ACTIONS.OFFER_CREDENTIALS_FOR_TAB, { origin: pageOrigin, matches: res.matches })
+  })
+}
+
+// ── Wiring ─────────────────────────────────────────────────────────────────
+
+const watcher = createFieldWatcher({
+  onPasswordField(input) {
+    handleNewOrChangeField(input)
+    handleLoginField(input)
+  },
+})
+
+watcher.start()
+
+// ── Popup-triggered login fill ──────────────────────────────────────────────
+// The popup already made the user pick a specific saved credential and the
+// background worker already re-verified the origin match before returning
+// any plaintext (see ACTIONS.REVEAL_CREDENTIAL in the service worker) — this
+// listener's job is purely mechanical: find the login field and insert.
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return undefined // ignore anything not from this extension
+  if (msg?.action !== 'aegis/fill-login') return undefined
+
+  if (isInsecure) {
+    send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.insecure_origin_blocked', detail: `Fill blocked on insecure ${pageOrigin}`, severity: 'critical' })
+    sendResponse({ ok: false, error: 'insecure-origin' })
+    return true
+  }
+
+  const pwField = document.querySelector('input[type="password"], input[autocomplete="current-password"]')
+  if (!pwField) {
+    sendResponse({ ok: false, error: 'no-password-field-found' })
+    return true
+  }
+  const container = nearestFormLikeContainer(pwField)
+  const classification = classifyForm(container, location.href)
+  const targetPw = classification.fields.current ?? pwField
+  const userField = container.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i]')
+
+  setNativeValue(targetPw, msg.payload.password)
+  if (userField && msg.payload.username) setNativeValue(userField, msg.payload.username)
+
+  send(ACTIONS.SUBMIT_AUDIT, { action: 'assistant.autofill_filled', detail: `Saved credential filled on ${pageOrigin} via popup`, severity: 'warn' })
+  sendResponse({ ok: true })
+  return true
+})
+
+// If the page itself blurs/removes the panel's target field, hide the panel
+// rather than leaving it pointed at a stale element.
+document.addEventListener('focusout', (e) => {
+  if (isPanelOpen() && e.target === currentPanelTarget()) {
+    setTimeout(() => {
+      if (document.activeElement !== currentPanelTarget()) hideSuggestionPanel()
+    }, 150)
+  }
+}, true)

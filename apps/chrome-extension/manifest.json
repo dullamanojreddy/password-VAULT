@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "AEGIS Password Assistant",
+  "version": "0.1.0",
+  "description": "Zero-knowledge password suggestions, strength analysis, and autofill for AEGIS vault credentials.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "exclude_matches": [
+        "*://accounts.google.com/*",
+        "*://*.paypal.com/*",
+        "*://*.stripe.com/*",
+        "*://checkout.*/*",
+        "*://chrome.google.com/webstore/*",
+        "*://chromewebstore.google.com/*"
+      ],
+      "js": ["content/content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_origin_as_fallback": false
+    }
+  ],
+  "permissions": ["storage", "scripting", "activeTab", "alarms"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'; frame-ancestors 'none'"
+  },
+  "minimum_chrome_version": "116"
+}

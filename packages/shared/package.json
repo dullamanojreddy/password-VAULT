@@ -1,0 +1,24 @@
+{
+  "name": "@aegis/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical AEGIS crypto, strength analysis, policy, credential schema, and vault-client interface — shared by the Chrome extension and Windows desktop assistant.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./crypto": "./src/crypto.js",
+    "./strength": "./src/strength.js",
+    "./config": "./src/config.js",
+    "./credential-schema": "./src/credential-schema.js",
+    "./audit": "./src/audit.js",
+    "./vault-client": "./src/vault-client.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
