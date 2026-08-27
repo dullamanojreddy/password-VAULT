@@ -1,0 +1,13 @@
+[tool.pyright]
+include = ["backend"]
+exclude = ["**/node_modules", "**/__pycache__", "backend/.venv"]
+venvPath = "backend"
+venv = ".venv"
+extraPaths = ["backend", "backend/.venv/Lib/site-packages"]
+
+[tool.pyrefly]
+include = ["backend"]
+exclude = ["**/node_modules", "**/__pycache__", "backend/.venv"]
+venvPath = "backend"
+venv = ".venv"
+extraPaths = ["backend", "backend/.venv/Lib/site-packages"]

@@ -8,6 +8,46 @@ export function useVault() {
   return useSyncExternalStore(subscribe, getState, getState)
 }
 
+// Keeps plaintext exposure short-lived. Only one secret may be visible at a
+// time, and switching away from the tab hides it immediately.
+export function useTemporaryReveal(timeoutMs = 10_000) {
+  const [revealedId, setRevealedId] = useState(null)
+  const timer = useRef(null)
+
+  const hideRevealed = useCallback(() => {
+    clearTimeout(timer.current)
+    timer.current = null
+    setRevealedId(null)
+  }, [])
+
+  const toggleReveal = useCallback((id) => {
+    if (revealedId === id) {
+      hideRevealed()
+      return
+    }
+
+    clearTimeout(timer.current)
+    setRevealedId(id)
+    timer.current = setTimeout(hideRevealed, timeoutMs)
+  }, [hideRevealed, revealedId, timeoutMs])
+
+  useEffect(() => {
+    const hideWhenBackgrounded = () => {
+      if (document.hidden) hideRevealed()
+    }
+
+    window.addEventListener('blur', hideRevealed)
+    document.addEventListener('visibilitychange', hideWhenBackgrounded)
+    return () => {
+      window.removeEventListener('blur', hideRevealed)
+      document.removeEventListener('visibilitychange', hideWhenBackgrounded)
+      clearTimeout(timer.current)
+    }
+  }, [hideRevealed])
+
+  return { revealedId, toggleReveal, hideRevealed }
+}
+
 // Clipboard that clears itself. Leaving a password on the clipboard is one of
 // the most common real-world leaks from password managers.
 export function useSecureClipboard() {

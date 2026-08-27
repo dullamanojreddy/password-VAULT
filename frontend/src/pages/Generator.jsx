@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw, Copy, Check, Wand2, Dices, Loader2, Cpu } from 'lucide-react'
+import { RefreshCw, Copy, Check, Wand2, Dices, Loader2, Cpu, Eye, EyeOff } from 'lucide-react'
 import { generatePassword, generatePassphrase, checkBreached } from '../lib/crypto'
 import { analyze } from '../lib/strength'
 import { getPolicy } from '../lib/vault'
-import { useSecureClipboard } from '../lib/hooks'
+import { useSecureClipboard, useTemporaryReveal } from '../lib/hooks'
 import { Card } from '../components/ui'
 import { StrengthReport } from '../components/StrengthMeter'
 
@@ -16,10 +16,13 @@ export default function Generator() {
   const [breached, setBreached] = useState(null)
   const [checking, setChecking] = useState(false)
   const { copy, copiedId, remaining } = useSecureClipboard()
+  const { revealedId, toggleReveal, hideRevealed } = useTemporaryReveal()
+  const isRevealed = revealedId === 'generator'
 
   const regenerate = useCallback(() => {
+    hideRevealed()
     setValue(mode === 'random' ? generatePassword({ length, ...opts }) : generatePassphrase({ words }))
-  }, [mode, length, words, opts])
+  }, [hideRevealed, mode, length, words, opts])
 
   useEffect(() => { regenerate() }, [regenerate])
 
@@ -57,8 +60,17 @@ export default function Generator() {
 
         <div className="flex items-center gap-2 rounded-xl border border-[#1e293b] bg-[#070b14] p-4">
           <code className="min-w-0 flex-1 break-all font-mono text-[15px] leading-relaxed text-[#e8eefc]">
-            {value}
+            {isRevealed ? value : '•'.repeat(value.length)}
           </code>
+          <button
+            onClick={() => toggleReveal('generator')}
+            title={isRevealed ? 'Hide generated password' : 'Reveal generated password for 10 seconds'}
+            aria-label={isRevealed ? 'Hide generated password' : 'Reveal generated password for 10 seconds'}
+            aria-pressed={isRevealed}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-[#1e293b] text-[#7b8aa5] transition hover:border-sky-400/40 hover:text-sky-300"
+          >
+            {isRevealed ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
           <button
             onClick={regenerate}
             title="Regenerate"

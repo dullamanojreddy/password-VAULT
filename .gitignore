@@ -12,3 +12,14 @@ obj/
 
 # electron-builder output
 apps/desktop/release/
+
+# Python / Backend
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+.npm-cache/
+frontend/.npm-cache/
+

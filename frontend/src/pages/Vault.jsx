@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Search, Plus, Eye, EyeOff, Copy, Check, Star, Pencil, Trash2, ExternalLink, KeySquare, ShieldAlert, Wand2,
+  Search, Plus, Eye, EyeOff, Copy, Check, Star, Pencil, Trash2, ExternalLink, KeySquare, KeyRound, ShieldAlert, Wand2,
 } from 'lucide-react'
 import { CATEGORIES } from '../lib/config'
 import { decryptAll, deleteItem, toggleFavorite } from '../lib/vault'
-import { useVault, useSecureClipboard } from '../lib/hooks'
+import { useVault, useSecureClipboard, useTemporaryReveal } from '../lib/hooks'
 import { analyze } from '../lib/strength'
 import { Card, Empty } from '../components/ui'
 import { StrengthBadge } from '../components/StrengthMeter'
 import AppLogo from '../components/AppLogo'
 import ItemModal from '../components/ItemModal'
+import MasterKeyModal from '../components/MasterKeyModal'
 
 export default function Vault() {
   const { db } = useVault()
   const [items, setItems] = useState([])
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('All')
-  const [revealed, setRevealed] = useState({})
   const [editing, setEditing] = useState(null)
+  const [decryptingItem, setDecryptingItem] = useState(null)
   const [confirmingDelete, setConfirmingDelete] = useState(null)
   const { copy, copiedId, remaining } = useSecureClipboard()
+  const { revealedId, toggleReveal } = useTemporaryReveal()
 
   // Decrypt the whole vault once per change — needed for reuse detection anyway.
   const refresh = useCallback(() => { decryptAll().then(setItems) }, [])
@@ -100,7 +102,7 @@ export default function Vault() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((item) => {
             const a = analyze(item.plaintext ?? '', { reused: reuseMap[item.plaintext] > 1 ? 'another account' : null })
-            const isRevealed = revealed[item.id]
+            const isRevealed = revealedId === item.id
             const ageDays = Math.floor((Date.now() - new Date(item.updatedAt)) / 864e5)
             return (
               <div
@@ -141,21 +143,24 @@ export default function Vault() {
                 ) : (
                   <div className="mt-3 flex items-center gap-1.5 rounded-lg border border-[#1e293b] bg-[#070b14] px-2.5 py-2">
                     <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-[#e8eefc]">
-                      {isRevealed ? item.plaintext : '•'.repeat(Math.min(18, item.plaintext?.length ?? 12))}
+                      {isRevealed ? (item.password?.ct || item.ct || '•'.repeat(18)) : '•'.repeat(18)}
                     </span>
                     <button
-                      onClick={() => setRevealed((r) => ({ ...r, [item.id]: !r[item.id] }))}
-                      title={isRevealed ? 'Hide' : 'Reveal'}
+                      onClick={() => toggleReveal(item.id)}
+                      title={isRevealed ? 'Hide encrypted ciphertext' : 'Reveal encrypted ciphertext for 10 seconds'}
+                      aria-label={isRevealed ? `Hide ${item.app} ciphertext` : `Reveal ${item.app} ciphertext for 10 seconds`}
+                      aria-pressed={isRevealed}
                       className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
                     >
                       {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                     <button
-                      onClick={() => copy(item.plaintext, item.id, item.app)}
-                      title="Copy (auto-clears)"
-                      className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
+                      onClick={() => setDecryptingItem(item)}
+                      title="Authorize master key to decrypt & copy"
+                      className="inline-flex shrink-0 items-center gap-1 rounded bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-300 transition hover:bg-sky-400/20"
                     >
-                      {copiedId === item.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      <KeyRound size={12} />
+                      <span>Decrypt</span>
                     </button>
                   </div>
                 )}
@@ -229,6 +234,17 @@ export default function Vault() {
           existingPasswords={items}
           onClose={() => setEditing(null)}
           onSaved={refresh}
+        />
+      )}
+
+      {decryptingItem && (
+        <MasterKeyModal
+          item={decryptingItem}
+          onClose={() => setDecryptingItem(null)}
+          onRevealed={() => {
+            toggleReveal(decryptingItem.id)
+            setDecryptingItem(null)
+          }}
         />
       )}
     </div>

@@ -172,6 +172,30 @@ export async function revealPassword(itemId) {
   return pt
 }
 
+export async function decryptWithMasterKey(itemId, masterPassword) {
+  if (!state.session) return { ok: false, error: 'Vault is locked. Please log in first.' }
+  const user = state.db.users.find((u) => u.id === state.session.userId)
+  if (!user) return { ok: false, error: 'User session not found.' }
+
+  const item = state.db.items.find((i) => i.id === itemId)
+  if (!item) return { ok: false, error: 'Credential not found.' }
+
+  // Verify master password cryptographically against user salt and verifier
+  const { key, verifier } = await deriveKey(masterPassword, user.salt)
+  if (verifier !== user.verifier) {
+    audit('item.decrypt_failed', `Incorrect master key attempted for ${item.app}`, 'warn')
+    return { ok: false, error: 'Incorrect master key. Decryption denied.' }
+  }
+
+  try {
+    const plaintext = await decryptField(key, item.password)
+    audit('item.decrypted_with_key', `Plaintext decrypted with master key for ${item.app}`, 'info')
+    return { ok: true, plaintext }
+  } catch (err) {
+    return { ok: false, error: 'Decryption failed: ' + (err?.message || 'Invalid key') }
+  }
+}
+
 // Decrypt every item once — used by the health scan and reuse detection.
 export async function decryptAll() {
   if (!state.session) return []

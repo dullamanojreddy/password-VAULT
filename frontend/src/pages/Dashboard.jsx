@@ -1,44 +1,53 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  KeySquare, ShieldAlert, Repeat2, Wand2, RefreshCw, Copy, Check, Eye, EyeOff,
-  ArrowRight, Search, Plus, ShieldCheck, Lock, Clock3, CircleCheck, TriangleAlert,
+  ShieldCheck, ShieldAlert, KeySquare, Repeat2, Plus, Search, Eye, EyeOff,
+  Copy, Check, ArrowRight, Wand2, RefreshCw, Lock, KeyRound, Clock3, TriangleAlert, CircleCheck,
 } from 'lucide-react'
 import { generatePassword } from '../lib/crypto'
 import { analyze } from '../lib/strength'
 import { getPolicy } from '../lib/vault'
-import { useVault, useVaultScan, useSecureClipboard } from '../lib/hooks'
+import { useVault, useVaultScan, useSecureClipboard, useTemporaryReveal } from '../lib/hooks'
 import { Card, Empty } from '../components/ui'
 import { StrengthBadge, StrengthBar } from '../components/StrengthMeter'
 import AppLogo from '../components/AppLogo'
 import ItemModal from '../components/ItemModal'
-
-const timeAgo = (iso) => {
-  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000)
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
-}
+import MasterKeyModal from '../components/MasterKeyModal'
 
 const ACTIVITY_LABEL = {
   'vault.unlocked': 'Vault unlocked',
   'vault.locked': 'Vault locked',
-  'item.created': 'Password added',
-  'item.updated': 'Password updated',
-  'item.deleted': 'Password deleted',
+  'item.created': 'Credential created',
+  'item.updated': 'Credential updated',
+  'item.deleted': 'Credential deleted',
   'item.revealed': 'Password revealed',
-  'clipboard.copy': 'Password copied',
-  'clipboard.cleared': 'Clipboard cleared',
+  'clipboard.copy': 'Copied to clipboard',
+  'clipboard.cleared': 'Clipboard auto-cleared',
+  'auth.registered': 'Account registered',
+  'auth.verified': 'Master password verified',
+  'alert.whatsapp_sent': 'WhatsApp alert sent',
+  'alert.whatsapp_failed': 'WhatsApp alert failed',
+  'policy.updated': 'Security policy updated',
+  'user.status': 'Account status changed',
+  'user.rotation': 'Rotation required',
+}
+
+function timeAgo(iso) {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000))
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
 }
 
 export default function Dashboard({ onNavigate }) {
-  const { db, session } = useVault()
+  const { session, db } = useVault()
   const { items, report, scanning } = useVaultScan()
   const { copy, copiedId, remaining } = useSecureClipboard()
+  const { revealedId, toggleReveal, hideRevealed } = useTemporaryReveal()
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
+  const [decryptingItem, setDecryptingItem] = useState(null)
   const [genPassword, setGenPassword] = useState(() => generatePassword({ length: 18 }))
-  const [revealed, setRevealed] = useState({})
 
   const quick = useMemo(() => {
     const needle = q.toLowerCase()
@@ -101,7 +110,7 @@ export default function Dashboard({ onNavigate }) {
           ) : (
             <ul className="space-y-1.5">
               {quick.map((item) => {
-                const isRevealed = revealed[item.id]
+                const isRevealed = revealedId === item.id
                 const a = analyze(item.plaintext ?? '')
                 return (
                   <li
@@ -113,23 +122,26 @@ export default function Dashboard({ onNavigate }) {
                       <div className="truncate text-[13px] font-medium text-[#e8eefc]">{item.app}</div>
                       <div className="truncate text-[11px] text-[#7b8aa5]">{item.username}</div>
                     </div>
-                    <span className="hidden font-mono text-[12px] text-[#4d5f7a] sm:block">
-                      {isRevealed ? item.plaintext : '•'.repeat(10)}
+                    <span className="hidden max-w-[120px] truncate font-mono text-[12px] text-[#4d5f7a] sm:block">
+                      {isRevealed ? (item.password?.ct || item.ct || '•'.repeat(10)) : '•'.repeat(10)}
                     </span>
                     <StrengthBadge level={a.level} />
                     <button
-                      onClick={() => setRevealed((r) => ({ ...r, [item.id]: !r[item.id] }))}
+                      onClick={() => toggleReveal(item.id)}
                       className="text-[#4d5f7a] transition hover:text-sky-300"
-                      title={isRevealed ? 'Hide' : 'Reveal'}
+                      title={isRevealed ? 'Hide encrypted ciphertext' : 'Reveal encrypted ciphertext for 10 seconds'}
+                      aria-label={isRevealed ? `Hide ${item.app} ciphertext` : `Reveal ${item.app} ciphertext for 10 seconds`}
+                      aria-pressed={isRevealed}
                     >
                       {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                     <button
-                      onClick={() => copy(item.plaintext, item.id, item.app)}
-                      className="text-[#4d5f7a] transition hover:text-sky-300"
-                      title="Copy (auto-clears)"
+                      onClick={() => setDecryptingItem(item)}
+                      title="Authorize master key to decrypt & copy"
+                      className="inline-flex shrink-0 items-center gap-1 rounded bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-300 transition hover:bg-sky-400/20"
                     >
-                      {copiedId === item.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      <KeyRound size={12} />
+                      <span>Decrypt</span>
                     </button>
                   </li>
                 )
@@ -156,9 +168,20 @@ export default function Dashboard({ onNavigate }) {
         <div className="space-y-5">
           <Card title="Generate Strong Password">
             <div className="flex items-center gap-1.5 rounded-lg border border-[#1e293b] bg-[#070b14] p-2.5">
-              <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-[#e8eefc]">{genPassword}</code>
+              <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-[#e8eefc]">
+                {revealedId === 'dashboard-generator' ? genPassword : '•'.repeat(genPassword.length)}
+              </code>
               <button
-                onClick={() => setGenPassword(generatePassword({ length: 18 }))}
+                onClick={() => toggleReveal('dashboard-generator')}
+                title={revealedId === 'dashboard-generator' ? 'Hide generated password' : 'Reveal generated password for 10 seconds'}
+                aria-label={revealedId === 'dashboard-generator' ? 'Hide generated password' : 'Reveal generated password for 10 seconds'}
+                aria-pressed={revealedId === 'dashboard-generator'}
+                className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
+              >
+                {revealedId === 'dashboard-generator' ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+              <button
+                onClick={() => { hideRevealed(); setGenPassword(generatePassword({ length: 18 })) }}
                 title="Regenerate"
                 className="shrink-0 text-[#4d5f7a] transition hover:text-sky-300"
               >
@@ -229,7 +252,18 @@ export default function Dashboard({ onNavigate }) {
           initialPassword={adding === 'generated' ? genPassword : ''}
           existingPasswords={items}
           onClose={() => setAdding(false)}
-          onSaved={() => setGenPassword(generatePassword({ length: 18 }))}
+          onSaved={() => { hideRevealed(); setGenPassword(generatePassword({ length: 18 })) }}
+        />
+      )}
+
+      {decryptingItem && (
+        <MasterKeyModal
+          item={decryptingItem}
+          onClose={() => setDecryptingItem(null)}
+          onRevealed={() => {
+            toggleReveal(decryptingItem.id)
+            setDecryptingItem(null)
+          }}
         />
       )}
     </div>
