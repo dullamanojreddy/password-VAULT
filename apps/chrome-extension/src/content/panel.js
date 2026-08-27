@@ -98,6 +98,10 @@ export function showSuggestionPanel(target, ctx, state, handler) {
   shadow.appendChild(card)
   positionNear(target)
 
+  card.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+  })
+
   card.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-act]')
     if (!btn) return

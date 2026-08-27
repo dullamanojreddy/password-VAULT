@@ -20,16 +20,33 @@ function send(action, payload) {
   return chrome.runtime.sendMessage({ action, payload, origin: pageOrigin })
 }
 
-// React (and most frameworks) track input state via a synthetic wrapper
-// around the native value setter — assigning `.value` directly is silently
-// swallowed. This dispatches through the native setter and fires the same
-// events a real keystroke would, so the framework's own state updates too.
 function setNativeValue(input, value) {
-  const proto = Object.getPrototypeOf(input)
-  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
-  setter ? setter.call(input, value) : (input.value = value)
-  input.dispatchEvent(new Event('input', { bubbles: true }))
-  input.dispatchEvent(new Event('change', { bubbles: true }))
+  if (!input) return
+
+  try {
+    input.focus()
+  } catch {}
+
+  // 1. Call native prototype setter directly
+  const prototype = window.HTMLInputElement?.prototype
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+  if (setter) {
+    setter.call(input, value)
+  } else {
+    input.value = value
+  }
+
+  // 2. React 15/16/17/18/19 internal valueTracker
+  if (input._valueTracker) {
+    input._valueTracker.setValue(value)
+  }
+
+  // 3. Dispatch simulated typing events
+  input.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
+  try {
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: value }))
+  } catch {}
+  input.dispatchEvent(new Event('change', { bubbles: true, composed: true }))
 }
 
 async function handleNewOrChangeField(input) {
@@ -149,32 +166,43 @@ function onPanelAction(field, classification, getCurrent, setCurrent) {
       const appName = getCleanAppName()
       const username = getFormUsername() || `account@${location.hostname.replace(/^www\./i, '')}`
 
-      // 1. Encrypt and save in vault
-      const res = await send(ACTIONS.CREATE_CREDENTIAL, {
-        app: appName,
-        username,
-        password,
-        url: pageOrigin,
-      })
-
-      // 2. Set field values
-      setNativeValue(field, password)
+      // 1. Fill input immediately
+      const targetInputs = [field]
       if (classification.fields.confirm && classification.fields.confirm !== field) {
-        setNativeValue(classification.fields.confirm, password)
+        targetInputs.push(classification.fields.confirm)
+      }
+      const allPwInputs = Array.from(document.querySelectorAll('input[type="password"]'))
+      for (const el of allPwInputs) {
+        if (!targetInputs.includes(el)) targetInputs.push(el)
       }
 
-      // 3. Copy to clipboard
+      for (const inp of targetInputs) {
+        setNativeValue(inp, password)
+      }
+
+      // 2. Copy to clipboard
       try {
         await navigator.clipboard.writeText(password)
       } catch { /* clipboard */ }
 
+      // 3. Hide suggestion panel
       hideSuggestionPanel()
 
-      if (res?.ok) {
-        showInPageNotification(`Encrypted & saved as <strong>${appName}</strong> (${username}) in your AEGIS Vault!`)
-      } else {
-        showInPageNotification(`Password filled & copied for <strong>${appName}</strong>`)
-      }
+      // 4. Save encrypted in AEGIS vault asynchronously
+      send(ACTIONS.CREATE_CREDENTIAL, {
+        app: appName,
+        username,
+        password,
+        url: pageOrigin,
+      }).then((res) => {
+        if (res?.ok) {
+          showInPageNotification(`Encrypted & saved as <strong>${appName}</strong> (${username}) in your AEGIS Vault!`)
+        } else {
+          showInPageNotification(`Password filled & copied to clipboard! (Unlock AEGIS extension to sync)`)
+        }
+      }).catch(() => {
+        showInPageNotification(`Password filled & copied to clipboard!`)
+      })
 
       send(ACTIONS.SUBMIT_AUDIT, {
         action: 'assistant.autofill_saved',
