@@ -39,7 +39,7 @@
       "match_origin_as_fallback": false
     }
   ],
-  "permissions": ["storage", "scripting", "activeTab", "alarms"],
+  "permissions": ["storage", "scripting", "activeTab", "tabs", "alarms"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'; frame-ancestors 'none'"

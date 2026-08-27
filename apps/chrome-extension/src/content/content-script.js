@@ -35,16 +35,21 @@ function setNativeValue(input, value) {
 async function handleNewOrChangeField(input) {
   if (isPaymentField(input)) return // never engage anywhere near a card field
 
-  const container = nearestFormLikeContainer(input)
-  if (Array.from(container.querySelectorAll('input')).some(isPaymentField)) return
+  const tryOpen = async () => {
+    const container = nearestFormLikeContainer(input)
+    if (Array.from(container.querySelectorAll('input')).some(isPaymentField)) return
+    const classification = classifyForm(container, location.href)
+    if (classification.kind === 'login') return
+    const targetField = classification.fields.new ?? input
+    await openSuggestionFor(targetField, classification)
+  }
 
-  const classification = classifyForm(container, location.href)
-  if (classification.kind !== 'signup' && classification.kind !== 'password-change') return
-  const targetField = classification.fields.new ?? input
-  if (targetField !== input) return // only react to focus on the actual target field, not a sibling
+  input.addEventListener('focus', tryOpen, { once: false })
+  input.addEventListener('click', tryOpen, { once: false })
 
-  input.addEventListener('focus', () => openSuggestionFor(targetField, classification), { once: false })
-  if (document.activeElement === input) await openSuggestionFor(targetField, classification)
+  if (document.activeElement === input) {
+    await tryOpen()
+  }
 }
 
 async function openSuggestionFor(field, classification) {

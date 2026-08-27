@@ -3,15 +3,13 @@
 // state — so this file is unit-testable with jsdom and reusable from both
 // the content script and its tests without mocking the extension runtime.
 
-const NEW_PW_HINTS = /new.?password|create.?password|choose.?a.?password|confirm.?password|password.?confirm|repeat.?password|signup|sign.?up|register|create.?account/i
-const CURRENT_PW_HINTS = /current.?password|log.?in.?password|^password$|sign.?in/i
+const NEW_PW_HINTS = /new.?password|create.?password|choose.?a.?password|confirm.?password|password.?confirm|repeat.?password|signup|sign.?up|emailsignup|register|create.?account|get.?started/i
+const CURRENT_PW_HINTS = /current.?password|log.?in.?password|sign.?in/i
 const RESET_HINTS = /reset.?password|forgot.?password|change.?password|update.?password|new.?password/i
 
-const LOGIN_URL_HINTS = /\/(login|signin|log-in|sign-in|auth)(\/|$|\?)/i
-const SIGNUP_URL_HINTS = /\/(signup|sign-up|register|create-account|join)(\/|$|\?)/i
-// Not anchored to a whole path segment — "/reset-password", "/reset_password",
-// and "resetpassword" (no separator) should all count.
-const RESET_URL_HINTS = /reset[-_]?password|forgot[-_]?password|change[-_]?password|update[-_]?password|\/reset(\/|$|\?)|\/forgot(\/|$|\?)/i
+const LOGIN_URL_HINTS = /(login|signin|log-in|sign-in|auth)/i
+const SIGNUP_URL_HINTS = /(signup|sign-up|emailsignup|register|create-account|join|get-started|start|onboarding)/i
+const RESET_URL_HINTS = /reset[-_]?password|forgot[-_]?password|change[-_]?password|update[-_]?password|reset|forgot/i
 
 const PAYMENT_AUTOCOMPLETE = /^cc-|^cc$/i
 
@@ -48,10 +46,7 @@ function nearbyText(input) {
 }
 
 /**
- * @returns {'new-password'|'current-password'|'password'} — best-effort
- *   role for a single password-like field, honoring the site's own
- *   autocomplete attribute first per the WHATWG Autofill spec, then falling
- *   back to naming/label heuristics.
+ * @returns {'new-password'|'current-password'|'password'}
  */
 export function getFieldRole(input) {
   const ac = (input.autocomplete || input.getAttribute('autocomplete') || '').toLowerCase()
@@ -88,26 +83,19 @@ export function classifyForm(container, pageUrl = '') {
   const news = roled.filter((r) => r.role === 'new-password').map((r) => r.field)
   const unlabeled = roled.filter((r) => r.role === 'password').map((r) => r.field)
 
-  const urlText = pageUrl.toLowerCase()
-  const formText = (container.textContent || '').slice(0, 2000).toLowerCase()
+  const urlText = (pageUrl || location.href || '').toLowerCase()
+  const formText = ((container.textContent || '') + ' ' + (document?.title || '')).slice(0, 3000).toLowerCase()
 
-  // Two roled password fields, one current + one new => a change/reset form,
-  // the single least ambiguous signal we have.
   if (current && news.length >= 1) {
     return { kind: 'password-change', confidence: 0.95, fields: { current, new: news[0], confirm: news[1] ?? null }, hasPaymentFields }
   }
 
-  // Two+ new-password fields with no current-password field => signup with
-  // a confirmation field, or a reset form reached via a token link (no
-  // "current password" is ever asked for in that flow either).
   if (news.length >= 2) {
     const kind = RESET_URL_HINTS.test(urlText) || RESET_HINTS.test(formText) ? 'password-change' : 'signup'
     return { kind, confidence: 0.85, fields: { current: null, new: news[0], confirm: news[1] }, hasPaymentFields }
   }
 
   if (news.length === 1) {
-    // A lone explicitly-new-password field: signup, or a reset-via-token
-    // form (both cases mean "generate me a strong new password").
     const kind = RESET_URL_HINTS.test(urlText) || RESET_HINTS.test(formText) ? 'password-change' : 'signup'
     return { kind, confidence: 0.75, fields: { current: null, new: news[0], confirm: unlabeled[0] ?? null }, hasPaymentFields }
   }
@@ -116,19 +104,21 @@ export function classifyForm(container, pageUrl = '') {
     return { kind: 'login', confidence: 0.9, fields: { current, new: null, confirm: null }, hasPaymentFields }
   }
 
-  // No autocomplete/label signal at all — fall back to URL + form-content
-  // context clues, weighted lowest since they're the least reliable.
   if (unlabeled.length === 1) {
-    if (SIGNUP_URL_HINTS.test(urlText)) return { kind: 'signup', confidence: 0.5, fields: { current: null, new: unlabeled[0], confirm: null }, hasPaymentFields }
-    if (LOGIN_URL_HINTS.test(urlText)) return { kind: 'login', confidence: 0.5, fields: { current: unlabeled[0], new: null, confirm: null }, hasPaymentFields }
-    return { kind: 'unknown', confidence: 0.3, fields: { current: unlabeled[0], new: null, confirm: null }, hasPaymentFields }
+    if (SIGNUP_URL_HINTS.test(urlText) || /sign.?up|get.?started|create.?account|join|register|start/i.test(formText)) {
+      return { kind: 'signup', confidence: 0.8, fields: { current: null, new: unlabeled[0], confirm: null }, hasPaymentFields }
+    }
+    if (LOGIN_URL_HINTS.test(urlText) || /log.?in|sign.?in/i.test(formText)) {
+      return { kind: 'login', confidence: 0.6, fields: { current: unlabeled[0], new: null, confirm: null }, hasPaymentFields }
+    }
+    return { kind: 'signup', confidence: 0.5, fields: { current: null, new: unlabeled[0], confirm: null }, hasPaymentFields }
   }
 
   if (unlabeled.length >= 2) {
-    if (SIGNUP_URL_HINTS.test(urlText) || /confirm|repeat/i.test(formText)) {
-      return { kind: 'signup', confidence: 0.55, fields: { current: null, new: unlabeled[0], confirm: unlabeled[1] }, hasPaymentFields }
+    if (SIGNUP_URL_HINTS.test(urlText) || /confirm|repeat|sign.?up/i.test(formText)) {
+      return { kind: 'signup', confidence: 0.75, fields: { current: null, new: unlabeled[0], confirm: unlabeled[1] }, hasPaymentFields }
     }
-    return { kind: 'password-change', confidence: 0.45, fields: { current: unlabeled[0], new: unlabeled[1], confirm: unlabeled[2] ?? null }, hasPaymentFields }
+    return { kind: 'password-change', confidence: 0.65, fields: { current: unlabeled[0], new: unlabeled[1], confirm: unlabeled[2] ?? null }, hasPaymentFields }
   }
 
   return { kind: 'unknown', confidence: 0.2, fields: { current: null, new: null, confirm: null }, hasPaymentFields }
@@ -138,13 +128,15 @@ export function classifyForm(container, pageUrl = '') {
 export function nearestFormLikeContainer(input) {
   const form = input.closest('form')
   if (form) return form
-  // SPA forms are frequently plain <div>s with no <form> element at all.
   let el = input.parentElement
+  let best = el
   let hops = 0
-  while (el && hops < 6) {
-    if (el.querySelectorAll('input').length >= 1 && (el.querySelector('button, [role="button"], input[type="submit"]'))) return el
+  while (el && hops < 20 && el !== document.body && el !== document.documentElement) {
+    if (el.querySelectorAll('input').length >= 1 && (el.querySelector('button, [role="button"], input[type="submit"]'))) {
+      best = el
+    }
     el = el.parentElement
     hops++
   }
-  return input.parentElement ?? input
+  return best ?? input.parentElement ?? input
 }
